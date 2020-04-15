@@ -9,6 +9,7 @@ use crate::tags::{
 };
 use crate::types::{DecryptionKey, ProtocolVersion};
 use crate::{Decryptable, RequiredVersion};
+use smallvec::{SmallVec,smallvec};
 
 /// A video is split into smaller chunks called [`MediaSegment`]s, which are
 /// specified by a uri and optionally a byte range.
@@ -154,6 +155,20 @@ pub struct MediaSegment<'a> {
 }
 
 impl<'a> MediaSegment<'a> {
+    pub fn new(uri: Cow<str>) -> MediaSegment {
+        MediaSegment {
+            number: 0,
+            explicit_number: false,
+            keys: smallvec![],
+            map: None,
+            byte_range: None,
+            date_range: None,
+            has_discontinuity: false,
+            program_date_time: None,
+            duration: Default::default(),
+            uri,
+        }
+    }
     /// Returns a builder for a [`MediaSegment`].
     ///
     /// # Example
@@ -205,7 +220,7 @@ impl<'a> MediaSegmentBuilder<'a> {
         if let Some(keys) = &mut self.keys {
             keys.push(value.into());
         } else {
-            self.keys = Some(vec![value.into()]);
+            self.keys = Some(smallvec![value.into()]);
         }
 
         self

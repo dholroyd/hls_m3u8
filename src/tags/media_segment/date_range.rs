@@ -359,7 +359,6 @@ impl<'a> TryFrom<&'a str> for ExtXDateRange<'a> {
 
     fn try_from(input: &'a str) -> Result<Self, Self::Error> {
         let input = tag(input, Self::PREFIX)?;
-
         let mut id = None;
         let mut class = None;
         let mut start_date = None;
@@ -379,23 +378,23 @@ impl<'a> TryFrom<&'a str> for ExtXDateRange<'a> {
                 "CLASS" => class = Some(unquote(value)),
                 "START-DATE" => {
                     #[cfg(feature = "chrono")]
-                    {
-                        start_date = Some(unquote(value).parse().map_err(Error::chrono)?)
-                    }
+                        {
+                            start_date = Some(unquote(value).parse().map_err(Error::chrono)?)
+                        }
                     #[cfg(not(feature = "chrono"))]
-                    {
-                        start_date = Some(unquote(value))
-                    }
+                        {
+                            start_date = Some(unquote(value))
+                        }
                 }
                 "END-DATE" => {
                     #[cfg(feature = "chrono")]
-                    {
-                        end_date = Some(unquote(value).parse().map_err(Error::chrono)?)
-                    }
+                        {
+                            end_date = Some(unquote(value).parse().map_err(Error::chrono)?)
+                        }
                     #[cfg(not(feature = "chrono"))]
-                    {
-                        end_date = Some(unquote(value))
-                    }
+                        {
+                            end_date = Some(unquote(value))
+                        }
                 }
                 "DURATION" => {
                     duration = Some(Duration::from_secs_f64(
@@ -451,19 +450,19 @@ impl<'a> TryFrom<&'a str> for ExtXDateRange<'a> {
         // TODO: verify this without chrono?
         // https://tools.ietf.org/html/rfc8216#section-4.3.2.7
         #[cfg(feature = "chrono")]
-        {
-            if let (Some(start_date), Some(Ok(duration)), Some(end_date)) = (
-                start_date,
-                duration.map(chrono::Duration::from_std),
-                &end_date,
-            ) {
-                if start_date + duration != *end_date {
-                    return Err(Error::custom(
-                        "end_date must be equal to start_date + duration",
-                    ));
+            {
+                if let (Some(start_date), Some(Ok(duration)), Some(end_date)) = (
+                    start_date,
+                    duration.map(chrono::Duration::from_std),
+                    &end_date,
+                ) {
+                    if start_date + duration != *end_date {
+                        return Err(Error::custom(
+                            "end_date must be equal to start_date + duration",
+                        ));
+                    }
                 }
             }
-        }
 
         Ok(Self {
             id,

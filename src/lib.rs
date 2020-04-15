@@ -137,6 +137,7 @@ mod master_playlist;
 mod media_playlist;
 mod media_segment;
 mod traits;
+pub mod parser;
 
 pub use error::Result;
 pub use stable_vec;
