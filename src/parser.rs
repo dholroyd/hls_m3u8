@@ -53,6 +53,7 @@ enum Tag<'a> {
     Unknown(&'a str),
 }
 
+// TODO: fold into crate::Error
 #[derive(Debug)]
 pub enum ParseError<'a> {
     Incomplete(&'static str),
@@ -69,6 +70,7 @@ enum SegmentState {
     InSegment,
 }
 
+// TODO: reconcile with crate::MediaSegmentBuilder
 struct MySegmentBuilder {
     state: SegmentState,
     segments: Vec<MediaSegment>,
@@ -123,6 +125,7 @@ impl MySegmentBuilder {
     }
 }
 
+// TODO: reconcile with crate::MediaPlaylistBuilder
 pub struct MyPlaylistBuilder {
     version: Option<ProtocolVersion>,
     media_sequence: Option<usize>,
@@ -142,7 +145,7 @@ impl Default for MyPlaylistBuilder {
     }
 }
 impl MyPlaylistBuilder {
-    fn add_line(&mut self, line: Line) {
+    fn add_line(&mut self, line: Line<'_>) {
         match line {
             Line::Tag(tag) => match tag {
                 Tag::ExtXVersion(v) => {
@@ -200,228 +203,256 @@ impl MyPlaylistBuilder {
     }
 }
 
-fn tag<'a>(input: &'a[u8], val: &'static [u8]) -> Result<'a, ()> {
-    if input.len() < val.len() {
-        return Err(ParseError::Incomplete("tag"))
-    }
-    if input.starts_with(val) {
-        Ok((&input[val.len()..], ()))
-    } else {
-        Err(ParseError::Unexpected { expected: val, found: &input[..val.len()] })
-    }
+pub struct Cursor<'a> {
+    buf: &'a [u8],
+    pos: usize,
 }
-pub fn new_parser(input: &[u8]) -> std::result::Result<MyPlaylistBuilder, ParseError> {
-    let (input, _) = tag(input, b"#EXTM3U")?;
-    let (input, _) = line_ending(input)?;
-    let (input, builder) = lines(input)?;
-    if !input.is_empty() {
-        return Err(ParseError::ExpectedEndOfInput(input))
-    }
-    Ok(builder)
-}
-fn lines(mut input: &[u8]) -> Result<MyPlaylistBuilder> {
-    let mut builder = MyPlaylistBuilder::default();
-    loop {
-        if input.is_empty() {
-            return Ok((input, builder));
+impl<'a> From<&'a [u8]> for Cursor<'a> {
+    fn from(buf: &'a [u8]) -> Self {
+        Cursor {
+            buf,
+            pos: 0,
         }
-        let (remain, line) = hls_line(input)?;
-        builder.add_line(line);
-        input = remain;
+    }
+}
+impl<'a> Cursor<'a> {
+    pub fn take(&mut self, n: usize) -> std::result::Result<&'a[u8], ParseError<'a>> {
+        if self.buf.len() < n {
+            return Err(ParseError::Incomplete("take"))  // FIXME: this param to Incomplete makes no sense
+        }
+        self.pos += n;
+        let (head, tail) = self.buf.split_at(n);
+        self.buf = tail;
+        Ok(head)
+    }
+
+    pub fn tag(&mut self, expected: &'static [u8]) -> std::result::Result<(), ParseError<'a>> {
+        if self.buf.starts_with(expected) {
+            self.pos += expected.len();
+            self.buf = &self.buf[expected.len()..];
+            Ok(())
+        } else {
+            Err(ParseError::Unexpected { expected, found: self.buf })
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    pub fn into_buf(self) -> &'a [u8] {
+        self.buf
+    }
+
+    fn take_till_eol(&mut self) -> &'a[u8] {
+        if let Some(pos) = memchr(b'\n', self.buf) {
+            let (head, tail) = self.buf.split_at(pos);
+            self.buf = tail;
+            self.pos += pos;
+            head
+        } else {
+            let res = self.buf.clone();
+            self.pos += self.buf.len();
+            self.buf = &self.buf[0..0];
+            res
+        }
+    }
+
+    fn u64(&mut self) -> std::result::Result<u64, ParseError<'a>> {
+        match ::lexical_core::parse_partial(self.buf) {
+            Ok((value, processed)) => {
+                self.take(processed);
+                Ok(value)
+            },
+            Err(_) => Err(ParseError::InvalidNumber)
+        }
+    }
+
+    fn f64(&mut self) -> std::result::Result<f64, ParseError<'a>> {
+        match ::lexical_core::parse_partial(self.buf) {
+            Ok((value, processed)) => {
+                self.take(processed);
+                Ok(value)
+            },
+            Err(_) => Err(ParseError::InvalidNumber)
+        }
     }
 }
 
-fn hls_line(input: &[u8]) -> Result<Line> {
-    let res = comment_or_tag(input);
-    if res.is_ok() { return res; }
 
-    let res = uri_line(input);
-    if res.is_ok() { return res; }
+pub struct Parser<'a> {
+    cursor: Cursor<'a>
+}
+impl<'a> Parser<'a> {
+    pub fn new(cursor: Cursor<'a>) -> Parser<'a> {
+        Parser {
+            cursor
+        }
+    }
+    pub fn parse(&mut self) -> std::result::Result<MyPlaylistBuilder, ParseError<'a>> {
+        self.cursor.tag(b"#EXTM3U")?;
+        self.line_ending()?;
+        let builder = self.lines()?;
+        if !self.cursor.is_empty() {
+            return Err(ParseError::ExpectedEndOfInput(self.cursor.buf))
+        }
+        Ok(builder)
+    }
+    fn lines(&mut self) -> std::result::Result<MyPlaylistBuilder, ParseError<'a>> {
+        let mut builder = MyPlaylistBuilder::default();
+        loop {
+            if self.cursor.is_empty() {
+                return Ok(builder);
+            }
+            let line = self.hls_line()?;
+            builder.add_line(line);
+        }
+    }
 
-    if let Ok((line,_)) = line_ending(input) {
-        Ok((input, Line::Comment(LazyStr(b""))))  // TODO: blank line
-    } else {
-        res
+    fn hls_line(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+        let res = self.comment_or_tag();
+        if res.is_ok() { return res; }
+
+        let res = self.uri_line();
+        if res.is_ok() { return res; }
+
+        self.line_ending()?;
+        Ok(Line::Comment(LazyStr(b"")))  // TODO: blank line
+    }
+
+    fn comment_or_tag(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+        self.cursor.tag(b"#")?;
+
+        let res = self.ext_tag_eol().map(|r| Line::Tag(r));
+        if res.is_ok() { return res; }
+
+        self.comment()
+    }
+
+    fn ext_tag_eol(&mut self) -> std::result::Result<Tag<'a>, ParseError<'a>> {
+        let res = self.ext_tag()?;
+
+        self.line_ending();
+        Ok(res)
+    }
+    fn ext_tag(&mut self) -> std::result::Result<Tag<'a>, ParseError<'a>> {
+        self.cursor.tag(b"EXT")?;
+
+        let res = self.ext_inf().map(|(duration, title)| Tag::ExtInf { duration, title });
+        if res.is_ok() { return res; }
+        let res = self.ext_date_range().map(Tag::ExtXDateRange);
+        if res.is_ok() { return res; }
+        let res = self.ext_program_date_time().map(Tag::ExtXProgramDateTime);
+        if res.is_ok() { return res; }
+        let res = self.ext_version().map(Tag::ExtXVersion);
+        if res.is_ok() { return res; }
+        let res = self.ext_media_sequence().map(Tag::ExtXMediaSequence);
+        if res.is_ok() { return res; }
+        let res = self.ext_independent_segments().map(Tag::ExtXIndependentSegments);
+        if res.is_ok() { return res; }
+        self.ext_target_duration().map(Tag::ExtXTargetDuration)
+    }
+
+    fn ext_version(&mut self) -> std::result::Result<ExtXVersion, ParseError<'a>> {
+        self.cursor.tag(b"-X-VERSION:")?;
+        let val = self.cursor.take(1)?;
+        Ok(ExtXVersion::new(ProtocolVersion::from_str(utf8(val)?).map_err(|_| ParseError::Attributes)?))
+    }
+
+    fn ext_media_sequence(&mut self) -> std::result::Result<ExtXMediaSequence, ParseError<'a>> {
+        self.cursor.tag(b"-X-MEDIA-SEQUENCE:")?;
+        let msn = self.cursor.f64()?;
+        Ok(ExtXMediaSequence(msn as usize))
+    }
+
+    fn ext_independent_segments(&mut self) -> std::result::Result<ExtXIndependentSegments, ParseError<'a>> {
+        self.cursor.tag(b"-X-INDEPENDENT-SEGMENTS")?;
+        Ok(ExtXIndependentSegments)
+    }
+
+    fn ext_target_duration(&mut self) -> std::result::Result<ExtXTargetDuration, ParseError<'a>> {
+        self.cursor.tag(b"-X-TARGETDURATION:")?;
+        let val = self.cursor.u64()?;
+        Ok(ExtXTargetDuration(std::time::Duration::from_secs(val)))
+    }
+
+
+    fn ext_program_date_time(&mut self) -> std::result::Result<ExtXProgramDateTime, ParseError<'a>> {
+        self.cursor.tag(b"-X-PROGRAM-DATE-TIME:")?;
+        let val = self.cursor.take_till_eol();
+        Ok(utf8(val).map(ExtXProgramDateTime::new)?)
+    }
+
+    fn ext_date_range(&mut self) -> std::result::Result<ExtXDateRange, ParseError<'a>> {
+        self.cursor.tag(b"-X-DATERANGE:")?;
+        let val = self.cursor.take_till_eol();
+        utf8(val).and_then(|s| ExtXDateRange::from_str_attrs(s).map_err(|_| ParseError::Attributes))
+    }
+
+    fn comment(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+        let res = self.cursor.take_till_eol();
+        let res = Line::Comment(LazyStr(res));
+
+        self.line_ending();
+        Ok(res)
+    }
+
+    fn ext_inf(&mut self) -> std::result::Result<(Duration, Option<LazyStr<'a>>), ParseError<'a>> {
+        self.cursor.tag(b"INF:")?;
+        let duration = self.duration()?;
+        self.cursor.tag(b",")?;
+        let description = self.description()?;
+
+        //inf.set_title_string(description);
+        Ok((duration, description))
+    }
+
+    fn uri_line(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+        if self.cursor.is_empty() {
+            return Err(ParseError::Incomplete("uri"))
+        }
+        let res = self.cursor.take_till_eol();
+        if res.is_empty() {
+            return Err(ParseError::Incomplete("uri"))
+        }
+        let res = if res.ends_with(b"\r") {
+            &res[..res.len() - 1]
+        } else {
+            res
+        };
+        let line = Line::Uri(LazyStr(res));
+        self.line_ending();
+        Ok(line)
+    }
+
+
+    fn duration(&mut self) -> std::result::Result<Duration, ParseError<'a>> {
+        self.cursor.f64()
+            .map(Duration::from_secs_f64)
+    }
+    fn description(&mut self) -> std::result::Result<Option<LazyStr<'a>>, ParseError<'a>> {
+        let r = self.cursor.take_till_eol();
+        if r.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(LazyStr(r)))
+        }
+    }
+
+    fn line_ending(&mut self) -> std::result::Result<(), ParseError<'a>> {
+        if self.cursor.is_empty() {
+            Err(ParseError::Incomplete("line-end"))
+        } else {
+            if let Ok(_) = self.cursor.tag(b"\r\n") {
+                Ok(())
+            } else {
+                self.cursor.tag(b"\n")
+            }
+        }
     }
 }
-
-fn comment_or_tag(input: &[u8]) -> Result<Line> {
-    let (input, _) = tag(input, b"#")?;
-
-    let res = ext_tag_eol(input).map(|(i, r)| (i, Line::Tag(r)) );
-    if res.is_ok() { return res; }
-
-    comment(input)
-}
-
-fn ext_tag_eol(input: &[u8]) -> Result<Tag> {
-    let (input, res) = ext_tag(input)?;
-
-    if let Ok((trimmed_input, _)) = line_ending(input) {
-        Ok((trimmed_input, res))
-    } else {
-        Ok((input, res))
-    }
-}
-fn ext_tag(input: &[u8]) -> Result<Tag> {
-    let (input, _) = tag(input, b"EXT")?;
-
-    let res = ext_inf(input).map(|(input, (duration, title))| (input, Tag::ExtInf { duration, title }));
-    if res.is_ok() { return res; }
-    let res = ext_date_range(input).map(|(input, t)| (input, Tag::ExtXDateRange(t)));
-    if res.is_ok() { return res; }
-    let res = ext_program_date_time(input).map(|(input, t)| (input, Tag::ExtXProgramDateTime(t)));
-    if res.is_ok() { return res; }
-    let res = ext_version(input).map(|(input, t)| (input, Tag::ExtXVersion(t)));
-    if res.is_ok() { return res; }
-    let res = ext_media_sequence(input).map(|(input, t)| (input, Tag::ExtXMediaSequence(t)));
-    if res.is_ok() { return res; }
-    let res = ext_independent_segments(input).map(|(input, t)| (input, Tag::ExtXIndependentSegments(t)));
-    if res.is_ok() { return res; }
-    ext_target_duration(input).map(|(input, t)| (input, Tag::ExtXTargetDuration(t)))
-}
-
-fn slice(input: &[u8], size: usize) -> Result<&[u8]> {
-    if size > input.len() {
-        Err(ParseError::Incomplete("slice"))
-    } else {
-        Ok((&input[size..], &input[..size]))
-    }
-}
-
-fn utf8(input: &[u8]) -> std::result::Result<&str, ParseError> {
+fn utf8(input: &[u8]) -> std::result::Result<&str, ParseError<'_>> {
     std::str::from_utf8(input)
         .map_err(|_| ParseError::Utf8(input))
 }
 
-fn ext_version(input: &[u8]) -> Result<ExtXVersion> {
-    let (input, _) = tag(input, b"-X-VERSION:")?;
-    let (input, val) = slice(input, 1)?;
-    Ok((input, ExtXVersion::new(ProtocolVersion::from_str(utf8(val)?).map_err(|_| ParseError::Attributes)?)))
-}
-
-fn ext_media_sequence(input: &[u8]) -> Result<ExtXMediaSequence> {
-    let (input, _) = tag(input, b"-X-MEDIA-SEQUENCE:")?;
-    let (input, msn) = parse_u64(input)?;
-    Ok((input, ExtXMediaSequence(msn as usize)))
-}
-
-fn ext_independent_segments(input: &[u8]) -> Result<ExtXIndependentSegments> {
-    let (input, _) = tag(input, b"-X-INDEPENDENT-SEGMENTS")?;
-    Ok((input, ExtXIndependentSegments))
-}
-
-fn ext_target_duration(input: &[u8]) -> Result<ExtXTargetDuration> {
-    let (input, _) = tag(input, b"-X-TARGETDURATION:")?;
-    let (input, val) = parse_u64(input)?;
-    Ok((input, ExtXTargetDuration(std::time::Duration::from_secs(val))))
-}
-
-fn take_till_eol(input: &[u8]) -> (&[u8], &[u8]) {
-    if let Some(pos) = memchr(b'\n', input) {
-        let (res, input) = input.split_at(pos);
-            (input, res)
-    } else {
-        (&input[0..0], input)
-    }
-}
-
-fn ext_program_date_time(input: &[u8]) -> Result<ExtXProgramDateTime> {
-    let (input, _) = tag(input, b"-X-PROGRAM-DATE-TIME:")?;
-    let (input, val) = take_till_eol(input);
-    Ok((input, utf8(val).map(ExtXProgramDateTime::new)?))
-}
-
-fn ext_date_range(input: &[u8]) -> Result<ExtXDateRange> {
-    let (input, _) = tag(input, b"-X-DATERANGE:")?;
-    let (input, val) = take_till_eol(input);
-    let res = utf8(val).and_then(|s| ExtXDateRange::from_str_attrs(s).map_err(|_| ParseError::Attributes))?;
-    Ok((input,  res))
-}
-
-fn comment(input: &[u8]) -> Result<Line> {
-    let (input, res) = take_till_eol(input);
-    let res = Line::Comment(LazyStr(res));
-
-    if let Ok((trimmed_input, _)) = line_ending(input) {
-        Ok((trimmed_input, res))
-    } else {
-        Ok((input, res))
-    }
-}
-
-fn ext_inf(input: &[u8]) -> Result<(Duration, Option<LazyStr<'_>>)> {
-    let (input, _) = tag(input, b"INF:")?;
-    let (input, duration) = duration(input)?;
-    let (input, _) = tag(input, b",")?;
-    let (input, description) = description(input)?;
-
-    //inf.set_title_string(description);
-    Ok((input, (duration, description)))
-}
-
-fn uri_line(input: &[u8]) -> Result<Line> {
-    let o = input.clone();
-    if input.is_empty() {
-        return Err(ParseError::Incomplete("uri"))
-    }
-    let (input, res) = take_till_eol(input);
-    if res.is_empty() {
-        return Err(ParseError::Incomplete("uri"))
-    }
-    let res = if res.ends_with(b"\r") {
-        &res[..res.len()-1]
-    } else {
-        res
-    };
-    let line = Line::Uri(LazyStr(res));
-    if let Ok((trimmed_input, _)) = line_ending(input) {
-        Ok((trimmed_input, line))
-    } else {
-        Ok((input, line))
-    }
-}
-
-
-fn duration(input: &[u8]) -> Result<Duration> {
-    parse_f64(input)
-        .map(|(i, r)| (i, Duration::from_secs_f64(r)) )
-}
-fn description(input: &[u8]) -> Result<Option<LazyStr>> {
-    let (i, r) = take_till_eol(input);
-    if r.is_empty() {
-        Ok((i, None))
-    } else {
-        Ok((i, Some(LazyStr(r))))
-    }
-}
-
-
-fn line_ending(input: &[u8]) -> Result<()> {
-    if input.is_empty() {
-        Err(ParseError::Incomplete("line-end"))
-    } else {
-        if input.len() > 2 {
-            if let Ok((input, _)) = tag(input, b"\r\n") {
-                Ok((input, ()))
-            } else {
-                tag(input, b"\n")
-            }
-        } else {
-            tag(input, b"\n")
-        }
-    }
-}
-
-fn parse_u64(input: &[u8]) -> Result<u64> {
-    match ::lexical_core::parse_partial(input) {
-        Ok((value, processed)) => Ok((&input[processed..], value)),
-        Err(_) => Err(ParseError::InvalidNumber)
-    }
-}
-fn parse_f64(input: &[u8]) -> Result<f64> {
-    match ::lexical_core::parse_partial(input) {
-        Ok((value, processed)) => Ok((&input[processed..], value)),
-        Err(_) => Err(ParseError::InvalidNumber)
-    }
-}

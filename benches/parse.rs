@@ -44,7 +44,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
     group.bench_function("nom parser", |b| {
         b.iter(|| {
-            let build = hls_m3u8::parser::new_parser(&buf[..]).unwrap();
+            let cursor = hls_m3u8::parser::Cursor::from(&buf[..]);
+            let mut parser = hls_m3u8::parser::Parser::new(cursor);
+            let build = parser.parse().unwrap();
             let playlist = build.build().unwrap();
             criterion::black_box(playlist)
         });
