@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, HashMap};
 use stable_vec::StableVec;
 
 use crate::types::{DecryptionKey, ProtocolVersion};
-use smallvec::SmallVec;
 
 mod private {
     pub trait Sealed {}
@@ -75,16 +74,6 @@ pub trait RequiredVersion {
 }
 
 impl<T: RequiredVersion> RequiredVersion for Vec<T> {
-    fn required_version(&self) -> ProtocolVersion {
-        self.iter()
-            .map(RequiredVersion::required_version)
-            .max()
-            // return ProtocolVersion::V1, if the iterator is empty:
-            .unwrap_or_default()
-    }
-}
-
-impl<T: RequiredVersion> RequiredVersion for SmallVec<[T; 1]> {
     fn required_version(&self) -> ProtocolVersion {
         self.iter()
             .map(RequiredVersion::required_version)

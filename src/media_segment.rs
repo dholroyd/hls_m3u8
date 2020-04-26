@@ -9,7 +9,6 @@ use crate::tags::{
 };
 use crate::types::{DecryptionKey, ProtocolVersion};
 use crate::{Decryptable, RequiredVersion};
-use smallvec::{SmallVec,smallvec};
 
 /// A video is split into smaller chunks called [`MediaSegment`]s, which are
 /// specified by a uri and optionally a byte range.
@@ -159,7 +158,7 @@ impl<'a> MediaSegment<'a> {
         MediaSegment {
             number: 0,
             explicit_number: false,
-            keys: smallvec![],
+            keys: vec![],
             map: None,
             byte_range: None,
             date_range: None,
@@ -220,7 +219,7 @@ impl<'a> MediaSegmentBuilder<'a> {
         if let Some(keys) = &mut self.keys {
             keys.push(value.into());
         } else {
-            self.keys = Some(smallvec![value.into()]);
+            self.keys = Some(vec![value.into()]);
         }
 
         self

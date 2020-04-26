@@ -60,31 +60,59 @@ fn create_manifest_data() -> Vec<u8> {
 }
 
 fn media_playlist_from_str(c: &mut Criterion) {
-    let data = String::from_utf8(create_manifest_data()).unwrap();
+    let data = create_manifest_data();
 
     let mut group = c.benchmark_group("MediaPlaylist::from_str");
 
     group.throughput(Throughput::Bytes(data.len() as u64));
 
     group.bench_function("MediaPlaylist::from_str", |b| {
-        b.iter(|| MediaPlaylist::from_str(black_box(&data)).unwrap());
+        b.iter(|| {
+            let data = std::str::from_utf8(black_box(&data[..])).unwrap();
+            MediaPlaylist::from_str(&data).unwrap()
+        });
     });
 
     group.finish();
 }
 
 fn media_playlist_try_from(c: &mut Criterion) {
-    let data = String::from_utf8(create_manifest_data()).unwrap();
+    let data = create_manifest_data();
 
     let mut group = c.benchmark_group("MediaPlaylist::try_from");
 
     group.throughput(Throughput::Bytes(data.len() as u64));
 
     group.bench_function("MediaPlaylist::try_from", |b| {
-        b.iter(|| MediaPlaylist::try_from(black_box(data.as_str())).unwrap());
+        let data = std::str::from_utf8(black_box(&data[..])).unwrap();
+        b.iter(|| MediaPlaylist::try_from(black_box(data)).unwrap());
     });
 
     group.finish();
 }
 
-criterion_group!(benches, media_playlist_from_str, media_playlist_try_from);
+fn media_playlist_new_parser(c: &mut Criterion) {
+    let data = create_manifest_data();
+
+    let mut group = c.benchmark_group("parser::parser");
+
+    group.throughput(Throughput::Bytes(data.len() as u64));
+
+    group.bench_function("parser::parser", |b| {
+        b.iter(|| {
+            let cursor = hls_m3u8::parser::Cursor::from(black_box(&data[..]));
+            let mut parser = hls_m3u8::parser::Parser::new(cursor);
+            let build = parser.parse().unwrap();
+            build.build().unwrap();
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    media_playlist_from_str,
+    media_playlist_try_from,
+    media_playlist_new_parser
+);

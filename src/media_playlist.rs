@@ -157,15 +157,15 @@ impl<'a> MediaPlaylistBuilder<'a> {
                 // from the rfc: https://tools.ietf.org/html/rfc8216#section-6.2.3
 
                 let is_aes128 = segments
-                    .iter()
+                    .values()
                     // convert iterator of segments to iterator of keys
-                    .flat_map(|(_, s)| s.keys.iter())
+                    .flat_map(|s| s.keys.iter())
                     // filter out all empty keys
                     .filter_map(ExtXKey::as_ref)
                     .any(|k| k.method == EncryptionMethod::Aes128);
 
                 if is_aes128 {
-                    for key in segments.iter().flat_map(|(_, s)| s.keys.iter()) {
+                    for key in segments.values().flat_map(|s| s.keys.iter()) {
                         if let ExtXKey(Some(key)) = key {
                             if key.method != EncryptionMethod::Aes128 {
                                 return Err(Error::custom(concat!(
@@ -183,7 +183,7 @@ impl<'a> MediaPlaylistBuilder<'a> {
                 }
             }
 
-            for (_, segment) in segments.iter() {
+            for segment in segments.values() {
                 // CHECK: `#EXT-X-TARGETDURATION`
                 let segment_duration = segment.duration.duration();
 
@@ -405,7 +405,7 @@ impl<'a> MediaPlaylist<'a> {
     /// duration together.
     #[must_use]
     pub fn duration(&self) -> Duration {
-        self.segments.iter().map(|(_, s)| s.duration.duration()).sum()
+        self.segments.values().map(|s| s.duration.duration()).sum()
     }
 
     /// Makes the struct independent of its lifetime, by taking ownership of all
@@ -500,7 +500,7 @@ impl<'a> fmt::Display for MediaPlaylist<'a> {
 
         let mut available_keys = HashSet::<ExtXKey<'_>>::new();
 
-        for (_, segment) in self.segments.iter() {
+        for segment in self.segments.values() {
             for key in &segment.keys {
                 if let ExtXKey(Some(decryption_key)) = key {
                     // next segment will be encrypted, so the segment can not have an empty key
@@ -821,10 +821,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut segments = playlist.segments.into_iter().map(|(_, v)| v.number);
-        assert_eq!(segments.next(), Some(0));
-        assert_eq!(segments.next(), Some(1));
-        assert_eq!(segments.next(), Some(2));
+        let mut segments = playlist.segments.into_iter().map(|(k, v)| (k, v.number));
+        assert_eq!(segments.next(), Some((0, 0)));
+        assert_eq!(segments.next(), Some((1, 1)));
+        assert_eq!(segments.next(), Some((2, 2)));
         assert_eq!(segments.next(), None);
     }
 

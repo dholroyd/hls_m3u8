@@ -3,18 +3,22 @@ use crate::tags::{ExtInf, ExtXVersion, ExtXMediaSequence, ExtXIndependentSegment
 use std::time::Duration;
 use crate::types::{ProtocolVersion, PlaylistType};
 use std::convert::TryInto;
-use smallvec::alloc::borrow::Cow;
-use smallvec::alloc::string::FromUtf8Error;
+use std::borrow::Cow;
+use std::string::FromUtf8Error;
 use std::str::FromStr;
 use std::ops::RangeFrom;
 use std::fmt;
 use memchr::memchr;
 use std::io::BufRead;
+use stable_vec::StableVec;
 
 struct LazyStr<'a>(&'a[u8]);
 impl<'a> LazyStr<'a> {
     fn try_to_string(&self) -> std::result::Result<String, std::string::FromUtf8Error> {
         String::from_utf8(Vec::from(self.0))
+    }
+    fn try_str(&self) -> std::result::Result<Cow<'a, str>, std::str::Utf8Error> {
+        std::str::from_utf8(self.0).map(Cow::Borrowed)
     }
 }
 impl<'a> fmt::Debug for LazyStr<'a> {
@@ -34,22 +38,22 @@ enum Tag<'a> {
     ExtInf { duration: Duration, title: Option<LazyStr<'a>> },
     ExtXByteRange(tags::ExtXByteRange),
     ExtXDiscontinuity(tags::ExtXDiscontinuity),
-    ExtXKey(tags::ExtXKey),
-    ExtXMap(tags::ExtXMap),
-    ExtXProgramDateTime(tags::ExtXProgramDateTime),
-    ExtXDateRange(tags::ExtXDateRange),
+    ExtXKey(tags::ExtXKey<'a>),
+    ExtXMap(tags::ExtXMap<'a>),
+    ExtXProgramDateTime(tags::ExtXProgramDateTime<'a>),
+    ExtXDateRange(tags::ExtXDateRange<'a>),
     ExtXTargetDuration(tags::ExtXTargetDuration),
     ExtXMediaSequence(tags::ExtXMediaSequence),
     ExtXDiscontinuitySequence(tags::ExtXDiscontinuitySequence),
     ExtXEndList(tags::ExtXEndList),
     PlaylistType(PlaylistType),
     ExtXIFramesOnly(tags::ExtXIFramesOnly),
-    ExtXMedia(tags::ExtXMedia),
-    ExtXSessionData(tags::ExtXSessionData),
-    ExtXSessionKey(tags::ExtXSessionKey),
+    ExtXMedia(tags::ExtXMedia<'a>),
+    ExtXSessionData(tags::ExtXSessionData<'a>),
+    ExtXSessionKey(tags::ExtXSessionKey<'a>),
     ExtXIndependentSegments(tags::ExtXIndependentSegments),
     ExtXStart(tags::ExtXStart),
-    VariantStream(tags::VariantStream),
+    VariantStream(tags::VariantStream<'a>),
     Unknown(&'a str),
 }
 
@@ -71,35 +75,37 @@ enum SegmentState {
 }
 
 // TODO: reconcile with crate::MediaSegmentBuilder
-struct MySegmentBuilder {
+struct MySegmentBuilder<'a> {
     state: SegmentState,
-    segments: Vec<MediaSegment>,
-    program_date_time: Option<ExtXProgramDateTime>,
-    date_range: Option<ExtXDateRange>,
-    ext_inf: Option<ExtInf>,
+    segments: StableVec<MediaSegment<'a>>,
+    program_date_time: Option<ExtXProgramDateTime<'a>>,
+    date_range: Option<ExtXDateRange<'a>>,
+    ext_inf: Option<ExtInf<'a>>,
 }
-impl Default for MySegmentBuilder {
+impl<'a> Default for MySegmentBuilder<'a> {
     fn default() -> Self {
         MySegmentBuilder {
             state: SegmentState::AwaitExtinf,
-            segments: vec![],
+            segments: StableVec::default(),
             program_date_time: None,
             date_range: None,
             ext_inf: None,
         }
     }
 }
-impl MySegmentBuilder {
-    fn uri(&mut self, uri: LazyStr<'_>) {
-        let uri = match uri.try_to_string() {
+impl<'a> MySegmentBuilder<'a> {
+    fn uri(&mut self, uri: LazyStr<'a>) {
+        let uri = match uri.try_str() {
             Ok(v) => v,
             Err(e) => {
-                println!("Bad UTF-8 in URL");
+                // TODO: propagate Err somewhere
+                println!("TODO: Bad UTF-8 in URL");
                 return;
             },
         };
         match self.state {
             SegmentState::AwaitExtinf => {
+                // TODO: propagate Err somewhere
                 println!("Got uri without EXTINF tag, {:?}", uri);
             },
             SegmentState::InSegment => {
@@ -111,29 +117,29 @@ impl MySegmentBuilder {
         }
         self.state = SegmentState::AwaitExtinf;
     }
-    fn date_range(&mut self, date_range: ExtXDateRange) {
+    fn date_range(&mut self, date_range: ExtXDateRange<'a>) {
         self.date_range = Some(date_range);
     }
 
-    fn program_date_time(&mut self, date_time: ExtXProgramDateTime) {
+    fn program_date_time(&mut self, date_time: ExtXProgramDateTime<'a>) {
         self.program_date_time = Some(date_time);
     }
 
-    fn ext_inf(&mut self, duration: Duration, title: Option<LazyStr<'_>>) {
+    fn ext_inf(&mut self, duration: Duration, title: Option<LazyStr<'a>>) {
         self.ext_inf = Some(ExtInf::new(duration));
         self.state = SegmentState::InSegment;
     }
 }
 
 // TODO: reconcile with crate::MediaPlaylistBuilder
-pub struct MyPlaylistBuilder {
+pub struct MyPlaylistBuilder<'a> {
     version: Option<ProtocolVersion>,
     media_sequence: Option<usize>,
     target_duration: Option<Duration>,
     independent_segments: bool,
-    segment_builder: MySegmentBuilder,
+    segment_builder: MySegmentBuilder<'a>,
 }
-impl Default for MyPlaylistBuilder {
+impl<'a> Default for MyPlaylistBuilder<'a> {
     fn default() -> Self {
         MyPlaylistBuilder {
             version: None,
@@ -144,8 +150,8 @@ impl Default for MyPlaylistBuilder {
         }
     }
 }
-impl MyPlaylistBuilder {
-    fn add_line(&mut self, line: Line<'_>) {
+impl<'a> MyPlaylistBuilder<'a> {
+    fn add_line(&mut self, line: Line<'a>) {
         match line {
             Line::Tag(tag) => match tag {
                 Tag::ExtXVersion(v) => {
@@ -186,7 +192,7 @@ impl MyPlaylistBuilder {
         }
     }
 
-    pub fn build(self) -> std::result::Result<MediaPlaylist, Error> {
+    pub fn build(self) -> std::result::Result<MediaPlaylist<'a>, Error> {
         Ok(MediaPlaylist {
             target_duration: self.target_duration.ok_or_else(|| Error::missing_tag("EXT-X-TARGETDURATION", ""))?,
             media_sequence: 0,
@@ -196,7 +202,7 @@ impl MyPlaylistBuilder {
             has_independent_segments: false,
             start: None,
             has_end_list: false,
-            segments: stable_vec::StableVec::default(),
+            segments: self.segment_builder.segments,
             allowable_excess_duration: Default::default(),
             unknown: vec![]
         })
@@ -289,7 +295,7 @@ impl<'a> Parser<'a> {
             cursor
         }
     }
-    pub fn parse(&mut self) -> std::result::Result<MyPlaylistBuilder, ParseError<'a>> {
+    pub fn parse(&mut self) -> std::result::Result<MyPlaylistBuilder<'a>, ParseError<'a>> {
         self.cursor.tag(b"#EXTM3U")?;
         self.line_ending()?;
         let builder = self.lines()?;
@@ -298,7 +304,7 @@ impl<'a> Parser<'a> {
         }
         Ok(builder)
     }
-    fn lines(&mut self) -> std::result::Result<MyPlaylistBuilder, ParseError<'a>> {
+    fn lines(&mut self) -> std::result::Result<MyPlaylistBuilder<'a>, ParseError<'a>> {
         let mut builder = MyPlaylistBuilder::default();
         loop {
             if self.cursor.is_empty() {
@@ -377,13 +383,13 @@ impl<'a> Parser<'a> {
     }
 
 
-    fn ext_program_date_time(&mut self) -> std::result::Result<ExtXProgramDateTime, ParseError<'a>> {
+    fn ext_program_date_time(&mut self) -> std::result::Result<ExtXProgramDateTime<'a>, ParseError<'a>> {
         self.cursor.tag(b"-X-PROGRAM-DATE-TIME:")?;
         let val = self.cursor.take_till_eol();
         Ok(utf8(val).map(ExtXProgramDateTime::new)?)
     }
 
-    fn ext_date_range(&mut self) -> std::result::Result<ExtXDateRange, ParseError<'a>> {
+    fn ext_date_range(&mut self) -> std::result::Result<ExtXDateRange<'a>, ParseError<'a>> {
         self.cursor.tag(b"-X-DATERANGE:")?;
         let val = self.cursor.take_till_eol();
         utf8(val).and_then(|s| ExtXDateRange::from_str_attrs(s).map_err(|_| ParseError::Attributes))
