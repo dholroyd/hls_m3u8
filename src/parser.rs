@@ -27,36 +27,6 @@ impl<'a> fmt::Debug for LazyStr<'a> {
     }
 }
 
-enum Line<'a> {
-    Tag(Tag<'a>),
-    Comment(LazyStr<'a>),
-    Uri(LazyStr<'a>),
-}
-#[derive(Debug)]
-enum Tag<'a> {
-    ExtXVersion(tags::ExtXVersion),
-    ExtInf { duration: Duration, title: Option<LazyStr<'a>> },
-    ExtXByteRange(tags::ExtXByteRange),
-    ExtXDiscontinuity(tags::ExtXDiscontinuity),
-    ExtXKey(tags::ExtXKey<'a>),
-    ExtXMap(tags::ExtXMap<'a>),
-    ExtXProgramDateTime(tags::ExtXProgramDateTime<'a>),
-    ExtXDateRange(tags::ExtXDateRange<'a>),
-    ExtXTargetDuration(tags::ExtXTargetDuration),
-    ExtXMediaSequence(tags::ExtXMediaSequence),
-    ExtXDiscontinuitySequence(tags::ExtXDiscontinuitySequence),
-    ExtXEndList(tags::ExtXEndList),
-    PlaylistType(PlaylistType),
-    ExtXIFramesOnly(tags::ExtXIFramesOnly),
-    ExtXMedia(tags::ExtXMedia<'a>),
-    ExtXSessionData(tags::ExtXSessionData<'a>),
-    ExtXSessionKey(tags::ExtXSessionKey<'a>),
-    ExtXIndependentSegments(tags::ExtXIndependentSegments),
-    ExtXStart(tags::ExtXStart),
-    VariantStream(tags::VariantStream<'a>),
-    Unknown(&'a str),
-}
-
 // TODO: fold into crate::Error
 #[derive(Debug)]
 pub enum ParseError<'a> {
@@ -94,6 +64,9 @@ impl<'a> Default for MySegmentBuilder<'a> {
     }
 }
 impl<'a> MySegmentBuilder<'a> {
+    fn placeholder_mut(&mut self) -> &mut MediaSegment<'a> {
+        self.segments.find_last_mut().unwrap()
+    }
     fn uri(&mut self, uri: LazyStr<'a>) {
         let uri = match uri.try_str() {
             Ok(v) => v,
@@ -151,48 +124,55 @@ impl<'a> Default for MyPlaylistBuilder<'a> {
     }
 }
 impl<'a> MyPlaylistBuilder<'a> {
-    fn add_line(&mut self, line: Line<'a>) {
-        match line {
-            Line::Tag(tag) => match tag {
-                Tag::ExtXVersion(v) => {
-                    if let Some(old_v) = self.version {
-                        println!("EXT-X-VERSION redefined");
-                    }
-                    self.version = Some(v.version())
-                },
-                Tag::ExtInf { duration, title } => {
-                    self.segment_builder.ext_inf(duration, title);
-                },
-                Tag::ExtXMediaSequence(seq) => {
-                    self.media_sequence = Some(seq.0);
-                }
-                Tag::ExtXIndependentSegments(_) => {
-                    self.independent_segments = true;
-                }
-                Tag::ExtXTargetDuration(d) => {
-                    if let Some(old_v) = self.target_duration {
-                        println!("EXT-X-TARGETDURATION redefined");
-                    }
-                    self.target_duration = Some(d.0)
-                }
-                Tag::ExtXProgramDateTime(datetime) => {
-                    self.segment_builder.program_date_time(datetime);
-                }
-                Tag::ExtXDateRange(daterange) => {
-                    self.segment_builder.date_range(daterange);
-                }
-                _ => unimplemented!("tag {:?}", tag)
-            },
-            Line::Comment(c) => {
-                //println!("Comment: {:?}", c);
-            },
-            Line::Uri(uri) => {
-                self.segment_builder.uri(uri);
-            },
+    fn add_target_duration(&mut self, d: ExtXTargetDuration) {
+        if let Some(old_v) = self.target_duration {
+            println!("EXT-X-TARGETDURATION redefined");
         }
+        self.target_duration = Some(d.0)
+    }
+
+    fn add_independent_segments(&mut self, _independent_segments: ExtXIndependentSegments) {
+        self.independent_segments = true;
+    }
+
+    fn add_media_sequence_number(&mut self, seq: ExtXMediaSequence) {
+        self.media_sequence = Some(seq.0);
+    }
+
+    fn add_version(&mut self, v: ExtXVersion) {
+        if let Some(old_v) = self.version {
+            println!("EXT-X-VERSION redefined");
+        }
+        self.version = Some(v.version())
+    }
+
+    fn add_program_date_time(&mut self, datetime: ExtXProgramDateTime<'a>) {
+        self.segment_builder.program_date_time(datetime);
+    }
+
+    fn add_date_range(&mut self, daterange: ExtXDateRange<'a>) {
+        self.segment_builder.date_range(daterange);
+    }
+
+    fn add_duration(&mut self, duration: Duration, title: Option<LazyStr<'a>>) {
+        self.segment_builder.ext_inf(duration, title);
+    }
+
+    fn add_uri(&mut self, uri: LazyStr<'a>) {
+        self.segment_builder.uri(uri);
+    }
+
+    fn add_comment(&mut self, _comment: LazyStr<'a>) {
+        // ignore comments
+    }
+
+    fn add_blank(&mut self) {
+        // ignore blank lines
     }
 
     pub fn build(self) -> std::result::Result<MediaPlaylist<'a>, Error> {
+        let mut segments = self.segment_builder.segments;
+        segments.remove_last();
         Ok(MediaPlaylist {
             target_duration: self.target_duration.ok_or_else(|| Error::missing_tag("EXT-X-TARGETDURATION", ""))?,
             media_sequence: 0,
@@ -202,7 +182,7 @@ impl<'a> MyPlaylistBuilder<'a> {
             has_independent_segments: false,
             start: None,
             has_end_list: false,
-            segments: self.segment_builder.segments,
+            segments,
             allowable_excess_duration: Default::default(),
             unknown: vec![]
         })
@@ -287,35 +267,36 @@ impl<'a> Cursor<'a> {
 
 
 pub struct Parser<'a> {
-    cursor: Cursor<'a>
+    cursor: Cursor<'a>,
+    builder: MyPlaylistBuilder<'a>,
 }
 impl<'a> Parser<'a> {
     pub fn new(cursor: Cursor<'a>) -> Parser<'a> {
         Parser {
-            cursor
+            cursor,
+            builder: MyPlaylistBuilder::default(),
         }
     }
-    pub fn parse(&mut self) -> std::result::Result<MyPlaylistBuilder<'a>, ParseError<'a>> {
-        self.cursor.tag(b"#EXTM3U")?;
-        self.line_ending()?;
-        let builder = self.lines()?;
-        if !self.cursor.is_empty() {
-            return Err(ParseError::ExpectedEndOfInput(self.cursor.buf))
+    pub fn parse(mut self) -> std::result::Result<MyPlaylistBuilder<'a>, ParseError<'a>> {
+        let this = &mut self;
+        this.cursor.tag(b"#EXTM3U")?;
+        this.line_ending()?;
+        this.lines()?;
+        if !this.cursor.is_empty() {
+            return Err(ParseError::ExpectedEndOfInput(this.cursor.buf))
         }
-        Ok(builder)
+        Ok(self.builder)
     }
-    fn lines(&mut self) -> std::result::Result<MyPlaylistBuilder<'a>, ParseError<'a>> {
-        let mut builder = MyPlaylistBuilder::default();
+    fn lines(&mut self) -> std::result::Result<(), ParseError<'a>> {
         loop {
             if self.cursor.is_empty() {
-                return Ok(builder);
+                return Ok(());
             }
-            let line = self.hls_line()?;
-            builder.add_line(line);
+            self.hls_line()?;
         }
     }
 
-    fn hls_line(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+    fn hls_line(&mut self) -> std::result::Result<(), ParseError<'a>> {
         let res = self.comment_or_tag();
         if res.is_ok() { return res; }
 
@@ -323,40 +304,59 @@ impl<'a> Parser<'a> {
         if res.is_ok() { return res; }
 
         self.line_ending()?;
-        Ok(Line::Comment(LazyStr(b"")))  // TODO: blank line
+        self.builder.add_blank();  // TODO: represent blank line?
+        Ok(())
     }
 
-    fn comment_or_tag(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+    fn comment_or_tag(&mut self) -> std::result::Result<(), ParseError<'a>> {
         self.cursor.tag(b"#")?;
 
-        let res = self.ext_tag_eol().map(|r| Line::Tag(r));
+        let res = self.ext_tag_eol();
         if res.is_ok() { return res; }
 
         self.comment()
     }
 
-    fn ext_tag_eol(&mut self) -> std::result::Result<Tag<'a>, ParseError<'a>> {
+    fn ext_tag_eol(&mut self) -> std::result::Result<(), ParseError<'a>> {
         let res = self.ext_tag()?;
 
         self.line_ending();
-        Ok(res)
+        Ok(())
     }
-    fn ext_tag(&mut self) -> std::result::Result<Tag<'a>, ParseError<'a>> {
+    fn ext_tag(&mut self) -> std::result::Result<(), ParseError<'a>> {
         self.cursor.tag(b"EXT")?;
 
-        let res = self.ext_inf().map(|(duration, title)| Tag::ExtInf { duration, title });
-        if res.is_ok() { return res; }
-        let res = self.ext_date_range().map(Tag::ExtXDateRange);
-        if res.is_ok() { return res; }
-        let res = self.ext_program_date_time().map(Tag::ExtXProgramDateTime);
-        if res.is_ok() { return res; }
-        let res = self.ext_version().map(Tag::ExtXVersion);
-        if res.is_ok() { return res; }
-        let res = self.ext_media_sequence().map(Tag::ExtXMediaSequence);
-        if res.is_ok() { return res; }
-        let res = self.ext_independent_segments().map(Tag::ExtXIndependentSegments);
-        if res.is_ok() { return res; }
-        self.ext_target_duration().map(Tag::ExtXTargetDuration)
+        if let Ok((duration, title)) = self.ext_inf() {
+            self.builder.add_duration(duration, title);
+            return Ok(());
+        }
+        if let Ok(data_range) = self.ext_date_range() {
+            self.builder.add_date_range(data_range);
+            return Ok(());
+        }
+        if let Ok(date_time) = self.ext_program_date_time() {
+            self.builder.add_program_date_time(date_time);
+            return Ok(());
+        }
+        if let Ok(version) = self.ext_version() {
+            self.builder.add_version(version);
+            return Ok(());
+        }
+        if let Ok(msn) = self.ext_media_sequence() {
+            self.builder.add_media_sequence_number(msn);
+            return Ok(());
+        }
+        if let Ok(independent) = self.ext_independent_segments() {
+            self.builder.add_independent_segments(independent);
+            return Ok(());
+        }
+        match self.ext_target_duration() {
+            Ok(duration) => {
+                self.builder.add_target_duration(duration);
+                return Ok(())
+            },
+            Err(e) => Err(e),
+        }
     }
 
     fn ext_version(&mut self) -> std::result::Result<ExtXVersion, ParseError<'a>> {
@@ -395,12 +395,13 @@ impl<'a> Parser<'a> {
         utf8(val).and_then(|s| ExtXDateRange::from_str_attrs(s).map_err(|_| ParseError::Attributes))
     }
 
-    fn comment(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+    fn comment(&mut self) -> std::result::Result<(), ParseError<'a>> {
         let res = self.cursor.take_till_eol();
-        let res = Line::Comment(LazyStr(res));
+        let res = LazyStr(res);
 
         self.line_ending();
-        Ok(res)
+        self.builder.add_comment(res);
+        Ok(())
     }
 
     fn ext_inf(&mut self) -> std::result::Result<(Duration, Option<LazyStr<'a>>), ParseError<'a>> {
@@ -409,11 +410,10 @@ impl<'a> Parser<'a> {
         self.cursor.tag(b",")?;
         let description = self.description()?;
 
-        //inf.set_title_string(description);
         Ok((duration, description))
     }
 
-    fn uri_line(&mut self) -> std::result::Result<Line<'a>, ParseError<'a>> {
+    fn uri_line(&mut self) -> std::result::Result<(), ParseError<'a>> {
         if self.cursor.is_empty() {
             return Err(ParseError::Incomplete("uri"))
         }
@@ -426,9 +426,10 @@ impl<'a> Parser<'a> {
         } else {
             res
         };
-        let line = Line::Uri(LazyStr(res));
+        let line = LazyStr(res);
         self.line_ending();
-        Ok(line)
+        self.builder.add_uri(line);
+        Ok(())
     }
 
 

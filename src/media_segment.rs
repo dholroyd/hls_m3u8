@@ -154,7 +154,7 @@ pub struct MediaSegment<'a> {
 }
 
 impl<'a> MediaSegment<'a> {
-    pub fn new(uri: Cow<str>) -> MediaSegment {
+    pub fn new(uri: Cow<'a, str>) -> MediaSegment {
         MediaSegment {
             number: 0,
             explicit_number: false,
