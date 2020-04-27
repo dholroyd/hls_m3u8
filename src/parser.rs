@@ -269,7 +269,13 @@ impl<'a> Cursor<'a> {
     }
 
     fn f64(&mut self) -> std::result::Result<f64, ParseError<'a>> {
-        match ::lexical_core::parse_partial(self.buf) {
+        // By setting NumberFormat flags, we disallow values that lexical-core is capable of
+        // handling (like 'Inf' etc. special values, or '2e4' exponent notation) but are outside of
+        // the HLS spec, and also make parsing faster.
+        let format = lexical_core::NumberFormat::NO_SPECIAL
+            | lexical_core::NumberFormat::REQUIRED_INTEGER_DIGITS
+            | lexical_core::NumberFormat::NO_EXPONENT_NOTATION;
+        match ::lexical_core::parse_partial_format(self.buf, format) {
             Ok((value, processed)) => {
                 self.take(processed);
                 Ok(value)
@@ -278,7 +284,6 @@ impl<'a> Cursor<'a> {
         }
     }
 }
-
 
 pub struct Parser<'a> {
     cursor: Cursor<'a>,

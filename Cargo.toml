@@ -23,7 +23,7 @@ travis-ci = { repository = "sile/hls_m3u8" }
 chrono = { version = "0.4", optional = true }
 backtrace = { version = "0.3", features = ["std"], optional = true }
 memchr = "2.3"
-lexical-core = "0.6"
+lexical-core = { version = "0.6", features = [ "format" ] }
 
 derive_builder = "0.9"
 hex = "0.4"
@@ -44,3 +44,9 @@ criterion = "0.3.1"
 [[bench]]
 name = "bench_main"
 harness = false
+
+[profile.release]
+debug = true
+
+[profile.bench]
+debug = true
