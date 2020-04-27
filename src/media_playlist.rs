@@ -185,7 +185,7 @@ impl<'a> MediaPlaylistBuilder<'a> {
 
             for segment in segments.values() {
                 // CHECK: `#EXT-X-TARGETDURATION`
-                let segment_duration = segment.duration.duration();
+                let segment_duration = segment.duration.as_ref().unwrap().duration();
 
                 // round the duration if it is .5s
                 let rounded_segment_duration =
@@ -405,7 +405,7 @@ impl<'a> MediaPlaylist<'a> {
     /// duration together.
     #[must_use]
     pub fn duration(&self) -> Duration {
-        self.segments.values().map(|s| s.duration.duration()).sum()
+        self.segments.values().map(|s| s.duration.as_ref().unwrap().duration()).sum()
     }
 
     /// Makes the struct independent of its lifetime, by taking ownership of all

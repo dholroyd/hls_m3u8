@@ -142,7 +142,7 @@ pub struct MediaSegment<'a> {
     ///
     /// This field is required.
     #[builder(setter(into))]
-    pub duration: ExtInf<'a>,
+    pub duration: Option<ExtInf<'a>>,
     /// The URI of a media segment.
     ///
     /// ## Note
@@ -150,11 +150,11 @@ pub struct MediaSegment<'a> {
     /// This field is required.
     #[builder(setter(into))]
     #[shorthand(enable(into), disable(skip))]
-    uri: Cow<'a, str>,
+    pub(crate) uri: Option<Cow<'a, str>>,
 }
 
 impl<'a> MediaSegment<'a> {
-    pub fn new(uri: Cow<'a, str>) -> MediaSegment {
+    pub fn new(uri: Cow<str>) -> MediaSegment {
         MediaSegment {
             number: 0,
             explicit_number: false,
@@ -165,7 +165,7 @@ impl<'a> MediaSegment<'a> {
             has_discontinuity: false,
             program_date_time: None,
             duration: Default::default(),
-            uri,
+            uri: Some(uri),
         }
     }
     /// Returns a builder for a [`MediaSegment`].
@@ -207,8 +207,8 @@ impl<'a> MediaSegment<'a> {
             date_range: self.date_range.map(|v| v.into_owned()),
             has_discontinuity: self.has_discontinuity,
             program_date_time: self.program_date_time.map(|v| v.into_owned()),
-            duration: self.duration.into_owned(),
-            uri: Cow::Owned(self.uri.into_owned()),
+            duration: Some(self.duration.unwrap().into_owned()),
+            uri: Some(Cow::Owned(self.uri.unwrap().into_owned())),
         }
     }
 }
@@ -262,8 +262,8 @@ impl<'a> fmt::Display for MediaSegment<'a> {
             writeln!(f, "{}", value)?;
         }
 
-        writeln!(f, "{}", self.duration)?;
-        writeln!(f, "{}", self.uri)?;
+        writeln!(f, "{}", self.duration.as_ref().unwrap())?;
+        writeln!(f, "{}", self.uri.as_ref().unwrap())?;
         Ok(())
     }
 }

@@ -52,11 +52,27 @@ struct MySegmentBuilder<'a> {
     date_range: Option<ExtXDateRange<'a>>,
     ext_inf: Option<ExtInf<'a>>,
 }
+fn push_placeholder(segments: &mut StableVec<MediaSegment>) {
+    segments.push(MediaSegment {
+        number: 0,
+        explicit_number: false,
+        keys: vec![],
+        map: None,
+        byte_range: None,
+        date_range: None,
+        has_discontinuity: false,
+        program_date_time: None,
+        duration: None,
+        uri: None
+    });
+}
 impl<'a> Default for MySegmentBuilder<'a> {
     fn default() -> Self {
+        let mut segments = StableVec::default();
+        push_placeholder(&mut segments);
         MySegmentBuilder {
             state: SegmentState::AwaitExtinf,
-            segments: StableVec::default(),
+            segments,
             program_date_time: None,
             date_range: None,
             ext_inf: None,
@@ -82,24 +98,22 @@ impl<'a> MySegmentBuilder<'a> {
                 println!("Got uri without EXTINF tag, {:?}", uri);
             },
             SegmentState::InSegment => {
-                let mut seg = MediaSegment::new(uri);
-                seg.program_date_time = self.program_date_time.take();
-                seg.duration = self.ext_inf.take().unwrap();
-                self.segments.push(seg);
+                self.placeholder_mut().uri = Some(uri);
+                push_placeholder(&mut self.segments);
             },
         }
         self.state = SegmentState::AwaitExtinf;
     }
     fn date_range(&mut self, date_range: ExtXDateRange<'a>) {
-        self.date_range = Some(date_range);
+        self.placeholder_mut().date_range = Some(date_range);
     }
 
     fn program_date_time(&mut self, date_time: ExtXProgramDateTime<'a>) {
-        self.program_date_time = Some(date_time);
+        self.placeholder_mut().program_date_time = Some(date_time);
     }
 
     fn ext_inf(&mut self, duration: Duration, title: Option<LazyStr<'a>>) {
-        self.ext_inf = Some(ExtInf::new(duration));
+        self.placeholder_mut().duration = Some(ExtInf::new(duration));
         self.state = SegmentState::InSegment;
     }
 }
