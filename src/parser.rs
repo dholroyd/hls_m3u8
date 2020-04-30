@@ -386,7 +386,7 @@ impl<'a> Parser<'a> {
 
     fn ext_media_sequence(&mut self) -> std::result::Result<ExtXMediaSequence, ParseError<'a>> {
         self.cursor.tag(b"-X-MEDIA-SEQUENCE:")?;
-        let msn = self.cursor.f64()?;
+        let msn = self.cursor.u64()?;
         Ok(ExtXMediaSequence(msn as usize))
     }
 
