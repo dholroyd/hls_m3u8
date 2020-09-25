@@ -36,6 +36,8 @@ pub enum ParseError<'a> {
     InvalidNumber,
     ExpectedEndOfInput(&'a [u8]),
     Attributes,
+    #[cfg(feature = "chrono")]
+    Chrono(chrono::ParseError),
 }
 type Result<'a, T> = std::result::Result<(&'a [u8], T), ParseError<'a>>;
 
@@ -405,7 +407,14 @@ impl<'a> Parser<'a> {
     fn ext_program_date_time(&mut self) -> std::result::Result<ExtXProgramDateTime<'a>, ParseError<'a>> {
         self.cursor.tag(b"-X-PROGRAM-DATE-TIME:")?;
         let val = self.cursor.take_till_eol();
-        Ok(utf8(val).map(ExtXProgramDateTime::new)?)
+        utf8(val).and_then(|v| {
+            #[cfg(feature = "chrono")] {
+                Ok(ExtXProgramDateTime::new(chrono::DateTime::parse_from_rfc3339(v).map_err(ParseError::Chrono)?))
+            }
+            #[cfg(not(feature = "chrono"))] {
+                Ok(ExtXProgramDateTime::new(v))
+            }
+        })
     }
 
     fn ext_date_range(&mut self) -> std::result::Result<ExtXDateRange<'a>, ParseError<'a>> {
