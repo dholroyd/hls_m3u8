@@ -16,6 +16,7 @@ pub enum KeyFormat {
     ///
     /// [`EncryptionMethod::Aes128`]: crate::types::EncryptionMethod::Aes128
     Identity,
+    Other,
 }
 
 impl Default for KeyFormat {
@@ -26,9 +27,9 @@ impl FromStr for KeyFormat {
     type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        tag(&unquote(input), "identity")?; // currently only KeyFormat::Identity exists!
-
-        Ok(Self::Identity)
+        tag(&unquote(input), "identity")
+            .map(|_| Self::Identity )
+            .or_else(|_| Ok(Self::Other))
     }
 }
 
@@ -57,7 +58,7 @@ mod tests {
 
         assert_eq!(KeyFormat::Identity, "identity".parse().unwrap());
 
-        assert!("garbage".parse::<KeyFormat>().is_err());
+        assert_eq!(KeyFormat::Other, "garbage".parse::<KeyFormat>().unwrap());
     }
 
     #[test]

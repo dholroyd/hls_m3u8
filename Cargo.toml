@@ -34,6 +34,7 @@ shorthand = "0.1"
 strum = { version = "0.17", features = ["derive"] }
 
 stable-vec = { version = "0.4" }
+thincollections = "0.5.3"
 
 [dev-dependencies]
 pretty_assertions = "0.6"
