@@ -134,21 +134,21 @@ pub struct ExtXMap {
 }
 #[derive(Debug)]
 pub struct ExtXDateRange {
-    id: String,
-    class: Option<String>,
+    pub id: String,
+    pub class: Option<String>,
     #[cfg(feature = "chrono")]
-    start_date: Option<DateTime<FixedOffset>>,
+    pub start_date: Option<DateTime<FixedOffset>>,
     #[cfg(not(feature = "chrono"))]
-    start_date: Option<String>,
+    pub start_date: Option<String>,
     #[cfg(feature = "chrono")]
-    end_date: Option<DateTime<FixedOffset>>,
+    pub end_date: Option<DateTime<FixedOffset>>,
     #[cfg(not(feature = "chrono"))]
-    end_date: Option<String>,
+    pub end_date: Option<String>,
     pub duration: Option<Duration>,
     pub planned_duration: Option<Duration>,
-    scte35_cmd: Option<String>,
-    scte35_out: Option<String>,
-    scte35_in: Option<String>,
+    pub scte35_cmd: Option<String>,
+    pub scte35_out: Option<String>,
+    pub scte35_in: Option<String>,
     pub end_on_next: bool,
     pub client_attributes: BTreeMap<String, Value>,
 }
