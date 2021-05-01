@@ -132,7 +132,7 @@ pub struct ExtXMap {
     range: Option<ByteRange>,
     pub(crate) keys: ThinVec<ExtXKey>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExtXDateRange {
     pub id: String,
     pub class: Option<String>,
